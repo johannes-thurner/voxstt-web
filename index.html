@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>VoxSTT</title>
+    <meta name="description" content="Browser dictation: record, transcribe via the OpenAI API, copy the text." />
+    <!-- Add to Home Screen / standalone app. Relative paths so the same build
+         works from the tailnet root and the GitHub Pages /voxstt-web/ subpath. -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" type="image/png" href="icon-192.png" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <meta name="theme-color" content="#7c5cff" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="VoxSTT" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --accent: #7c5cff;
+        --accent-recording: #e5484d;
+        --surface: light-dark(#f6f6f8, #17171c);
+        --card: light-dark(#ffffff, #202028);
+        --text: light-dark(#1a1a21, #ececf1);
+        --muted: light-dark(#6b6b76, #9a9aa6);
+        --border: light-dark(#e2e2e8, #2e2e38);
+        --ai-mark: light-dark(#0284c7, #38bdf8);
+        --warn: light-dark(#b45309, #fbbf24);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        background: var(--surface);
+        color: var(--text);
+        font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+      }
+      main {
+        width: min(28rem, 100%);
+        padding: 1.25rem 1.25rem 3rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+      h1 { font-size: 1.1rem; margin: 0.5rem 0 0; }
+      h1 small { color: var(--muted); font-weight: normal; }
+      label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.3rem; }
+      input[type="password"] {
+        width: 100%;
+        padding: 0.6rem 0.7rem;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        background: var(--card);
+        color: var(--text);
+        font-size: 0.9rem;
+      }
+      .hint { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+      select, input[type="text"] {
+        width: 100%;
+        padding: 0.6rem 0.7rem;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        background: var(--card);
+        color: var(--text);
+        font-size: 0.9rem;
+      }
+      #record {
+        margin: 1rem auto 0;
+        width: 9rem;
+        height: 9rem;
+        border-radius: 50%;
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        font-size: 1.05rem;
+        font-weight: 600;
+        cursor: pointer;
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+      }
+      #record[data-state="recording"] { background: var(--accent-recording); }
+      #record:disabled { opacity: 0.5; cursor: default; }
+      .gesture {
+        display: flex;
+        justify-content: center;
+        gap: 1.25rem;
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+      .gesture label { display: flex; align-items: center; gap: 0.3rem; cursor: pointer; }
+      #meter {
+        height: 0.4rem;
+        margin: 0.75rem auto 0;
+        width: min(14rem, 80%);
+        border-radius: 0.2rem;
+        background: var(--border);
+        overflow: hidden;
+      }
+      #meterfill {
+        height: 100%;
+        width: 0%;
+        background: var(--accent);
+        transition: width 60ms linear;
+      }
+      #record[data-state="recording"] ~ #meter #meterfill { background: var(--accent-recording); }
+      #cancel[hidden] { display: none; }
+      #cancel {
+        margin: 0 auto;
+        display: block;
+        padding: 0.45rem 1.2rem;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        background: transparent;
+        color: var(--muted);
+        font-size: 0.85rem;
+        cursor: pointer;
+      }
+      #status { text-align: center; min-height: 1.2rem; color: var(--muted); font-size: 0.9rem; }
+      #status[data-kind="error"] { color: var(--accent-recording); }
+      #result {
+        display: none;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+        padding: 0.9rem;
+      }
+      #result.visible { display: block; }
+      #transcript { white-space: pre-wrap; word-wrap: break-word; margin: 0 0 0.75rem; font-size: 1rem; }
+      .result-actions { display: flex; gap: 0.5rem; }
+      #copy, #share {
+        padding: 0.5rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        background: transparent;
+        color: var(--text);
+        font-size: 0.85rem;
+        cursor: pointer;
+      }
+      #share { background: var(--accent); color: #fff; border-color: transparent; }
+      details#settings {
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+        background: var(--card);
+        padding: 0 0.9rem;
+      }
+      details#settings > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 0.75rem 0;
+        font-size: 0.9rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      details#settings > summary::-webkit-details-marker { display: none; }
+      details#settings > summary::after { content: "▸"; color: var(--muted); }
+      details#settings[open] > summary::after { content: "▾"; }
+      .settings-body {
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+        padding: 0 0 1rem;
+      }
+      .key-row { display: flex; gap: 0.5rem; align-items: center; }
+      .key-row input { flex: 1; }
+      .key-row button {
+        padding: 0.55rem 0.9rem;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        background: transparent;
+        color: var(--text);
+        font-size: 0.85rem;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      #savekey { background: var(--accent); color: #fff; border-color: transparent; }
+      #keymask { font-size: 0.9rem; color: var(--text); font-variant-numeric: tabular-nums; }
+      .toggle { display: flex; align-items: center; gap: 0.5rem; color: var(--text); font-size: 0.85rem; cursor: pointer; margin: 0; }
+      .toggle input { margin: 0; }
+      .device-note { border-top: 1px solid var(--border); padding-top: 0.75rem; }
+      #history { display: flex; flex-direction: column; gap: 0.5rem; }
+      #history[hidden] { display: none; }
+      .history-head { display: flex; align-items: center; justify-content: space-between; }
+      .history-head h2 { font-size: 0.9rem; margin: 0; }
+      #clearhistory {
+        padding: 0.35rem 0.8rem;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        background: transparent;
+        color: var(--muted);
+        font-size: 0.8rem;
+        cursor: pointer;
+      }
+      #historylist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+      .history-item {
+        width: 100%;
+        text-align: left;
+        padding: 0.6rem 0.7rem;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        background: var(--card);
+        color: var(--text);
+        font-size: 0.9rem;
+        cursor: pointer;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+      .history-empty { color: var(--muted); font-size: 0.85rem; }
+      details#help {
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+        background: var(--card);
+        padding: 0 0.9rem;
+        margin-top: 0.5rem;
+      }
+      details#help > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 0.75rem 0;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      details#help > summary::-webkit-details-marker { display: none; }
+      details#help > summary::after { content: "▸"; color: var(--muted); }
+      details#help[open] > summary::after { content: "▾"; }
+      .help-body { padding: 0 0 1rem; display: flex; flex-direction: column; gap: 0.85rem; }
+      .help-body h3 { font-size: 0.8rem; margin: 0 0 0.2rem; color: var(--text); }
+      .help-body p { font-size: 0.78rem; line-height: 1.45; color: var(--muted); margin: 0; }
+      .help-body a { color: var(--accent); }
+      .help-body kbd {
+        font: inherit;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 0.3rem;
+        padding: 0.05rem 0.35rem;
+        color: var(--text);
+      }
+      /* Output-format picker (custom dropdown mirroring the desktop). */
+      #format {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+        padding: 0.9rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .format-title { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+      .format-wrap { position: relative; }
+      #formatfield {
+        width: 100%;
+        min-height: 2.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.65rem 0.7rem;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        background: var(--card);
+        color: var(--text);
+        font-size: 0.95rem;
+        text-align: left;
+        cursor: pointer;
+      }
+      .format-current { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+      #formatlabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .format-mark { color: var(--ai-mark); flex: none; }
+      .format-chevron { color: var(--muted); flex: none; transition: transform 120ms ease; }
+      #formatfield[aria-expanded="true"] .format-chevron { transform: rotate(180deg); }
+      #formatlist {
+        position: absolute;
+        z-index: 20;
+        top: calc(100% + 0.3rem);
+        left: 0;
+        right: 0;
+        max-height: 60vh;
+        overflow-y: auto;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        padding: 0.25rem;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25);
+      }
+      #formatlist[hidden] { display: none; }
+      .format-option {
+        width: 100%;
+        min-height: 2.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        padding: 0.55rem 0.6rem;
+        border: none;
+        border-radius: 0.4rem;
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .format-option:hover { background: var(--surface); }
+      .format-option[aria-selected="true"] {
+        background: color-mix(in srgb, var(--accent) 16%, transparent);
+      }
+      .format-option-head { display: flex; align-items: center; gap: 0.4rem; font-size: 0.92rem; }
+      .format-check { margin-left: auto; color: var(--accent); font-weight: 700; flex: none; }
+      .format-option-hint { font-size: 0.75rem; color: var(--muted); }
+      #formathint { font-size: 0.75rem; color: var(--muted); margin: 0; }
+      #formatwarn { font-size: 0.75rem; color: var(--warn); margin: 0; }
+    </style>
+    <script type="module" crossorigin src="./assets/index-S2LMGUV-.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>VoxSTT <small>web dictation</small></h1>
+
+      <details id="settings">
+        <summary>Settings</summary>
+        <div class="settings-body">
+          <div>
+            <label for="apikey">OpenAI API key</label>
+            <div id="key-unset" class="key-row">
+              <input id="apikey" type="password" autocomplete="off" placeholder="sk-..." />
+              <button id="savekey" type="button">Save</button>
+            </div>
+            <div id="key-set" class="key-row" hidden>
+              <span id="keymask"></span>
+              <button id="removekey" type="button">Remove</button>
+            </div>
+            <p class="hint">
+              Stored in this browser only, sent only to api.openai.com. Use a dedicated key with a
+              low spend limit — never your main account key.
+            </p>
+          </div>
+          <div class="row">
+            <div>
+              <label for="language">Language</label>
+              <select id="language"></select>
+            </div>
+            <div>
+              <label for="mode">Default mode</label>
+              <select id="mode"></select>
+            </div>
+          </div>
+          <div>
+            <label for="transcribemodel">Transcription model</label>
+            <select id="transcribemodel"></select>
+            <p class="hint">OpenAI speech-to-text model used to turn your voice into text.</p>
+          </div>
+          <div class="row">
+            <div>
+              <label for="provider">AI provider</label>
+              <select id="provider"></select>
+            </div>
+            <div>
+              <label for="postprocessmodel">Model</label>
+              <input id="postprocessmodel" type="text" autocomplete="off" placeholder="gpt-4o-mini" />
+            </div>
+          </div>
+          <div id="provider-key">
+            <label for="providerkey">Provider API key</label>
+            <div id="provkey-unset" class="key-row">
+              <input id="providerkey" type="password" autocomplete="off" placeholder="key" />
+              <button id="saveprovkey" type="button">Save</button>
+            </div>
+            <div id="provkey-set" class="key-row" hidden>
+              <span id="provkeymask"></span>
+              <button id="removeprovkey" type="button">Remove</button>
+            </div>
+            <p class="hint">Stored in this browser only, sent only to the selected provider for the rewrite step.</p>
+          </div>
+          <p class="hint" id="provider-openai-hint" hidden>
+            The rewrite runs on your OpenAI API key above.
+          </p>
+          <div>
+            <label for="glossary">Glossary</label>
+            <input id="glossary" type="text" autocomplete="off" placeholder="Voxtronic, Kubernetes" />
+            <p class="hint">Comma-separated terms to spell correctly.</p>
+          </div>
+          <div>
+            <label for="maxrecording">Max recording length</label>
+            <select id="maxrecording"></select>
+            <p class="hint">Recording stops and transcribes when this is reached.</p>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="historytoggle" />
+            Save dictation history on this device
+          </label>
+          <p class="hint device-note">
+            Everything here — your API key, settings, and history — lives only in this browser.
+            Clearing this site's data wipes all of it.
+          </p>
+        </div>
+      </details>
+
+      <div class="gesture" role="radiogroup" aria-label="Recording gesture">
+        <label><input type="radio" name="gesture" value="hold" checked /> Hold to talk</label>
+        <label><input type="radio" name="gesture" value="toggle" /> Tap to toggle</label>
+      </div>
+      <button id="record" data-state="idle">Hold to talk</button>
+      <div id="meter" aria-hidden="true"><div id="meterfill"></div></div>
+      <p id="status" data-kind="info"></p>
+      <button id="cancel" hidden>Cancel</button>
+
+      <section id="result">
+        <p id="transcript"></p>
+        <div class="result-actions">
+          <button id="copy">Copy</button>
+          <button id="share">Share</button>
+        </div>
+      </section>
+
+      <section id="format" aria-label="Output format">
+        <span class="format-title">Output format</span>
+        <div class="format-wrap">
+          <button
+            id="formatfield"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-controls="formatlist"
+          >
+            <span class="format-current">
+              <span id="formatlabel"></span>
+              <span id="formatmark" class="format-mark" title="Uses AI cleanup" hidden>✦</span>
+            </span>
+            <svg
+              class="format-chevron"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <div id="formatlist" role="listbox" aria-label="Output format" hidden></div>
+        </div>
+        <p id="formathint"></p>
+        <p id="formatwarn" hidden></p>
+      </section>
+
+      <section id="history" hidden>
+        <div class="history-head">
+          <h2>History</h2>
+          <button id="clearhistory" type="button">Clear all</button>
+        </div>
+        <ul id="historylist"></ul>
+      </section>
+
+      <details id="help">
+        <summary>Add to Home Screen &amp; Siri</summary>
+        <div class="help-body">
+          <div>
+            <h3>Install as an app</h3>
+            <p>
+              In Safari, tap <kbd>Share</kbd> &rarr; <kbd>Zum Home-Bildschirm</kbd>
+              ("Add to Home Screen"). VoxSTT then launches full-screen from its own icon, and
+              your API key and settings stay saved.
+            </p>
+          </div>
+          <div>
+            <h3>"Hey Siri, VoxSTT Dictate" &amp; the Action Button</h3>
+            <p>
+              In the Shortcuts app, tap <kbd>+</kbd>, add the single action
+              <kbd>Open URL</kbd> pointing at this page, and name the shortcut
+              <em>VoxSTT Dictate</em>. Saying &ldquo;Hey Siri, VoxSTT Dictate&rdquo; then
+              opens it hands-free; on iPhone 15 Pro+ you can also bind it under
+              Settings &rarr; <kbd>Action Button</kbd> &rarr; Shortcut.
+            </p>
+          </div>
+          <div>
+            <h3>The microphone prompt</h3>
+            <p>
+              Launched from the Home Screen, iOS asks for microphone access once per app
+              launch. That is an iOS limitation for standalone web apps, not a bug &mdash;
+              grant it and dictate as normal.
+            </p>
+          </div>
+        </div>
+      </details>
+    </main>
+  </body>
+</html>
